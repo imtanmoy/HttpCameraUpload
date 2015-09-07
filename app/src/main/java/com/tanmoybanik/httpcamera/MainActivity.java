@@ -1,15 +1,22 @@
 package com.tanmoybanik.httpcamera;
 
+import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.hardware.Camera;
 import android.media.ExifInterface;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.ResultReceiver;
 import android.os.StrictMode;
 import android.support.v7.app.AppCompatActivity;
@@ -17,6 +24,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.Surface;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -40,8 +48,6 @@ public class MainActivity extends AppCompatActivity {
 
 
     private static final String TAG = "";
-    final String uploadFilePath = "/sdcard/";
-    final String uploadFileName = "file.jpg";
     String upLoadServerUri = "http://192.168.0.100/HttpCameraServer/upload_image.php";
     int serverResponseCode = 0;
 
@@ -52,6 +58,10 @@ public class MainActivity extends AppCompatActivity {
     private Camera mCamera;
     private CameraPreview mPreview;
     FrameLayout preview;
+
+
+    private int mInterval = 5000;
+    private Handler mHandler;
 
 
 
@@ -76,34 +86,71 @@ public class MainActivity extends AppCompatActivity {
             StrictMode.setThreadPolicy(policy);
         }
 
-               // File sourceFile = new File(uploadFilePath + "" + uploadFileName);
 
-               // uploadImage(sourceFile);
+        if(isNetworkAvailable())
+        {
+            showAlertDialog("Title","Internet Connected",true);
+            mHandler = new Handler();
+            startRepeatTask();
+        }
+        else
+        {
+            showAlertDialog("error", "Internet is not Connected", false);
+        }
+
+
+       // mHandler.post(startUploadImg);
 
 
 
-        preview.setOnClickListener(new View.OnClickListener() {
+       /* preview.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 mCamera.takePicture(null, null, mPicture);
             }
-        });
+        });*/
 
+    }
+
+    Runnable startUploadImg=new Runnable() {
+        @Override
+        public void run() {
+            mCamera.takePicture(null, null, mPicture);
+           // Log.e("Handlers", "Called");
+            mHandler.postDelayed(startUploadImg, mInterval);
+        }
+    };
+
+
+    void startRepeatTask()
+    {
+        startUploadImg.run();
+    }
+    void stopRepeatTask()
+    {
+        mHandler.removeCallbacks(startUploadImg);
     }
 
 
 /////// Creating a camera instance which will open the camera//////
 
-    public static Camera getCameraInstance(){
+    /////// Creating a camera instance which will open the camera//////
 
+    public Camera getCameraInstance(){
 
         Camera c = null;
+        if (!hasCamera(getApplicationContext()))
+        {
+            Toast.makeText(getApplicationContext(), "Your Mobile doesn't have camera!!!", Toast.LENGTH_LONG).show();
+        }else
+        {
+            try{
+                c=openBackFacingCamera();
+            }
+            catch (Exception e){
+                Log.e(TAG, "Camera failed to open: " + e.getLocalizedMessage());
+            }
+        }
 
-        try{
-            c=openBackFacingCamera();
-        }
-        catch (Exception e){
-            Log.e(TAG, "Camera failed to open: " + e.getLocalizedMessage());
-        }
         return c;
     }
 
@@ -154,12 +201,16 @@ public class MainActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         mCamera.stopPreview();
+        stopRepeatTask();
+        releaseCamera();
+//        mHandler.removeCallbacks(startUploadImg);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        releaseCamera();
+        stopRepeatTask();
+       // mHandler.removeCallbacks(startUploadImg);
     }
 
     @Override
@@ -168,6 +219,7 @@ public class MainActivity extends AppCompatActivity {
         if(mCamera == null) {
             mCamera = getCameraInstance();
             mPreview = new CameraPreview(this, mCamera);
+            mPreview.setCamera(mCamera);
             preview.addView(mPreview);
         }
     }
@@ -175,15 +227,75 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (mCamera != null) {
+            if (Build.VERSION.SDK_INT >= 14)
+                setCameraDisplayOrientation(this,
+                        Camera.CameraInfo.CAMERA_FACING_BACK, mCamera);
+            mPreview.setCamera(mCamera);
+        }
     }
 
     ///Refreshing the gallery too show the image///////////////s
 
-    private void refreshFallery(File file){
+ /*   private void refreshFallery(File file){
 
         Intent mediaScanintent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
         mediaScanintent.setData(Uri.fromFile(file));
         sendBroadcast(mediaScanintent);
+    }*/
+ public static void setCameraDisplayOrientation(Activity activity,
+                                                int cameraId, android.hardware.Camera camera) {
+     android.hardware.Camera.CameraInfo info =
+             new android.hardware.Camera.CameraInfo();
+     android.hardware.Camera.getCameraInfo(cameraId, info);
+     int rotation = activity.getWindowManager().getDefaultDisplay()
+             .getRotation();
+     int degrees = 0;
+     switch (rotation) {
+         case Surface.ROTATION_0: degrees = 0; break;
+         case Surface.ROTATION_90: degrees = 90; break;
+         case Surface.ROTATION_180: degrees = 180; break;
+         case Surface.ROTATION_270: degrees = 270; break;
+     }
+
+     int result;
+     if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+         result = (info.orientation + degrees) % 360;
+         result = (360 - result) % 360;  // compensate the mirror
+     } else {  // back-facing
+         result = (info.orientation - degrees + 360) % 360;
+     }
+     camera.setDisplayOrientation(result);
+ }
+
+    private boolean isNetworkAvailable() {
+        ConnectivityManager connectivityManager
+                = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        NetworkInfo activeNetworkInfo = connectivityManager.getActiveNetworkInfo();
+        return activeNetworkInfo != null && activeNetworkInfo.isConnected();
+    }
+
+    public void showAlertDialog(String title, String message, boolean status) {
+        AlertDialog alertDialog = new AlertDialog.Builder(MainActivity.this).create();
+
+        alertDialog.setTitle(title);
+        alertDialog.setMessage(message);
+        alertDialog.setCancelable(false);
+        alertDialog.setButton("OK", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+                return;
+            }
+        });
+        if (status)
+        {
+            alertDialog.setIcon(R.drawable.ok);
+        }
+        else
+        {
+            alertDialog.setIcon(R.drawable.error);
+        }
+
+        alertDialog.show();
     }
 
 
@@ -222,7 +334,7 @@ public class MainActivity extends AppCompatActivity {
                 fos.write(data);
                 fos.flush();
                 fos.close();
-                refreshFallery(pictureFile);
+              //  refreshFallery(pictureFile);
                 status=uploadImage(pictureFile);
 
 
